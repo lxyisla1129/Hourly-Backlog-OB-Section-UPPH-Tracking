@@ -1,7 +1,7 @@
 """Order-level packing deadline metrics from the integrated outbound export."""
 from zoneinfo import ZoneInfo
 import pandas as pd
-from iwms_calendar import backlog_window
+from iwms_calendar import backlog_window, weekly_backlog_window
 
 TZ = ZoneInfo("America/Los_Angeles")
 STAGES = {"Pending picking": "Picking Completion Time", "Pending recheck": "Recheck Time",
@@ -9,7 +9,7 @@ STAGES = {"Pending picking": "Picking Completion Time", "Pending recheck": "Rech
 REQUIRED = ["JD Order NO.", "Received Time", "SPB Name", *STAGES.values()]
 
 
-def backlog_summary(raw, day, now=None):
+def backlog_summary(raw, day, now=None, *, weekly=False):
     if set(REQUIRED).difference(raw.columns):
         raise ValueError("Integrated export is missing required order, receive, packed or SPB columns.")
     if raw["JD Order NO."].isna().any():
@@ -40,9 +40,18 @@ def backlog_summary(raw, day, now=None):
     if orders["received"].ne(orders["received_last"]).any():
         raise ValueError("One order has conflicting Received Time values.")
     left, right, deadline = backlog_window(day)
+    if weekly:
+        left, right = weekly_backlog_window(day)
     orders = orders.loc[orders.received.ge(left) & orders.received.lt(right) & ~orders.excluded]
     now = pd.Timestamp.now(TZ) if now is None else pd.Timestamp(now).tz_convert(TZ)
     complete = ~orders.incomplete & orders.packed.notna() & orders.packed.le(now)
+    if weekly:
+        total = len(orders)
+        return {
+            "Total received from last week": total,
+            "Total backlog": int((~complete).sum()),
+            "Completion rate": complete.sum() / total if total else None,
+        }
     on_time = complete & orders.packed.le(deadline)
     late = complete & orders.packed.gt(deadline)
     total = len(orders)

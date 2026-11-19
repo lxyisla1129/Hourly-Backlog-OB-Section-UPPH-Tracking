@@ -1,5 +1,6 @@
 """Export both reports for one warehouse with a dedicated Chrome profile."""
 import argparse
+import json
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -56,6 +57,8 @@ def main():
     parser.add_argument("--login-only", action="store_true", help="Initialize the warehouse Chrome profile without exporting.")
     parser.add_argument("--profile-warehouse", choices=WAREHOUSE_IDS, help="Reuse an existing warehouse Chrome profile.")
     parser.add_argument("--all-warehouses", action="store_true", help="Switch warehouses through Basic Data in one Chrome session.")
+    parser.add_argument("--workflows", nargs="+", choices=["picking", "packing", "backlog"], default=["picking", "packing", "backlog"])
+    parser.add_argument("--force-backlog", action="store_true", help="Refresh a backlog snapshot already collected today.")
     args = parser.parse_args()
     if args.login_only and args.strict:
         parser.error("--login-only requires manual SSO and cannot be combined with --strict.")
@@ -129,9 +132,15 @@ def main():
                         print(str(error) if isinstance(error, ExportError)
                               else f"{warehouse}: 切仓失败，已跳过该仓。", flush=True)
                         continue
-                    for workflow in ("picking", "packing", "backlog"):
+                    for workflow in args.workflows:
                         print(f"正在处理 {warehouse} {workflow} {day}…", flush=True)
                         path = None
+                        coverage = args.output_dir / f"{warehouse}_backlog_{day}.coverage.json"
+                        if workflow == "backlog" and coverage.exists() and not args.force_backlog:
+                            candidates = list(args.output_dir.glob(f"{warehouse}_backlog_{day}.xls*"))
+                            if candidates:
+                                print("今日每周范围积压快照已存在，跳过重复下载。", flush=True)
+                                continue
                         try:
                             frame = query_report(page, workflow, day, interactive=not args.strict)
                             download = download_report(page, frame, workflow, TIMEZONE)
@@ -142,6 +151,15 @@ def main():
                                 normalize_export(path, workflow, warehouse)
                             snapshot = path.with_name(f"{warehouse}_{workflow}_{day}{path.suffix}")
                             path.replace(snapshot)
+                            if workflow == "backlog":
+                                from iwms_calendar import weekly_backlog_window
+                                left, right = weekly_backlog_window(day)
+                                temporary = coverage.with_suffix(".tmp")
+                                temporary.write_text(json.dumps({
+                                    "received_from": left.isoformat(), "received_before": right.isoformat(),
+                                    "collected_at": datetime.now(TIMEZONE).isoformat()
+                                }))
+                                temporary.replace(coverage)
                             print(f"Dashboard snapshot saved as {snapshot.name}.", flush=True)
                         except (Error, AssertionError, ExportError, OSError) as error:
                             failures += 1

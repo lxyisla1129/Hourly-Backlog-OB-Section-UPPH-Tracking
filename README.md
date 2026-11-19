@@ -71,3 +71,15 @@ GitHub 用于分发版本。此版本由公司电脑采集并提供页面。部�
 Backlog Summary includes independent pending picking, recheck, packing and handover counts. A missing timestamp on any detail line means that order is pending that stage. These counts can overlap. BL is a reference based on a 24h baseline. Friday 15:00 through Monday 15:00 receipts are due Monday 17:30. Saturday and Sunday views show the Monday cohort available in that export. Export receipt filters use the same window.
 
 WTD covers Monday through the selected date, honors the selected business, customer and employee filters, and divides total units by the sum of daily activity hours. Missing daily exports are shown explicitly. Older missing days require backfilling. Seven-day retention still applies.
+
+## Weekly backlog
+
+The integrated export covers the union of the selected date and preceding six calendar-date receipt cohorts, retaining weekend rollover. Weekly totals use unique orders, exclude SPB 2B/selfpickup, and use Packed Time for completion. Total backlog excludes orders completed since an earlier daily cohort. This is the state at the latest collection time.
+
+Backlog is collected once per date; UPPH continues every two hours. Use --force-backlog for another same-day backlog collection. Each backlog Excel has a coverage JSON companion, removed with expired data. Previous daily-only exports cannot supply weekly totals.
+
+LAX5 test after stopping the running collector
+
+```bash
+python iwms_fixed.py 'https://pulsar-login.jd.com/login.html?ReturnUrl=https%3A%2F%2Fiwms-us.jd.com%2F#/' --warehouse LAX5 --profile-warehouse LAX1 --workflows backlog --force-backlog --click-login --strict
+```

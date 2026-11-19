@@ -13,7 +13,7 @@ from iwms_excel import normalize_export
 from metrics import cumulative, employee_summary, hourly, week_to_date
 from iwms_segments import special_business
 from iwms_backlog import backlog_summary
-from iwms_calendar import backlog_window
+from iwms_calendar import backlog_window, weekly_backlog_window
 
 title = "Hourly Backlog & OB Section UPPH Tracking"
 st.set_page_config(page_title=title, layout="wide")
@@ -36,14 +36,9 @@ with st.sidebar:
     if state.get("finished"):
         updated = datetime.fromtimestamp(state["finished"], ZoneInfo("America/Los_Angeles"))
         st.caption(f"Last round: {updated:%m-%d %H:%M} · {'Complete' if state.get('success') else 'Partial failure'}")
-    workbooks = {
-        workflow: st.file_uploader(f"{workflow.title()} Excel", type=["xlsx", "xls"])
-        for workflow in ("picking", "packing")
-    }
 
 @st.fragment(run_every=60)
 def packing_backlog():
-    st.subheader("Backlog Summary")
     directory = Path(__file__).with_name("iwms-exports")
     files = list(directory.glob(f"{warehouse}_backlog_{day}.xlsx")) + list(
         directory.glob(f"{warehouse}_backlog_{day}.xls")
@@ -60,13 +55,39 @@ def packing_backlog():
     except (ValueError, OSError):
         st.error("Cannot verify this export's required columns, order IDs or timestamps.")
         return
-    left, right, deadline = backlog_window(day)
-    st.caption(f"{warehouse} · Received {left:%m-%d %H:%M} to {right:%m-%d %H:%M} (exclusive) · Deadline {deadline:%m-%d %H:%M} · Los Angeles time")
-    st.caption("BL is a reference based on a 24h baseline. Weekend receipts from Friday 15:00 to Monday 15:00 are due Monday 17:30. Pending stages are counted independently and may overlap.")
-    columns = st.columns(3)
-    for index, (label, value) in enumerate(result.items()):
-        text = f"{value:.2%}" if label == "On-time completion" and value is not None else ("—" if value is None else f"{value:,}")
-        columns[index % 3].metric(label, text)
+    summary_tab, processing_tab = st.tabs(["Backlog Summary", "Total Processing Status"])
+    with summary_tab:
+        st.subheader("Backlog Summary")
+        coverage = export.with_suffix(".coverage.json")
+        if coverage.exists():
+            weekly_result = backlog_summary(pd.read_excel(export, dtype=object), day, weekly=True)
+            weekly_columns = st.columns(3)
+            for column, (label, value) in zip(weekly_columns, weekly_result.items()):
+                text = f"{value:.2%}" if label == "Completion rate" and value is not None else ("—" if value is None else f"{value:,}")
+                column.metric(label, text)
+            week_left, week_right = weekly_backlog_window(day)
+            st.caption(f"Receipt cohorts for the selected date and preceding six dates, including weekend rollover: {week_left:%m-%d %H:%M} to {week_right:%m-%d %H:%M} (exclusive). Status as of the export update time above. Excludes 2B/selfpickup.")
+        else:
+            st.info("Weekly totals await a new weekly-range backlog export; this older file only covers the daily cohort.")
+    with processing_tab:
+        st.subheader("Total Processing Status")
+        left, right, deadline = backlog_window(day)
+        st.caption(f"{warehouse} · Received {left:%m-%d %H:%M} to {right:%m-%d %H:%M} (exclusive) · Deadline {deadline:%m-%d %H:%M} · Los Angeles time")
+        st.caption("BL is a reference based on a 24h baseline. Weekend receipts from Friday 15:00 to Monday 15:00 are due Monday 17:30. Pending stages are counted independently and may overlap.")
+        daily_labels = {
+            "Received orders": "Received orders",
+            "Packed": "Packed",
+            "Pending picking": "Pending picking",
+            "Pending recheck": "Pending recheck",
+            "Pending packing": "Pending pack",
+            "Pending handover": "Pending handover",
+            "On-time completion": "On-time completion",
+        }
+        columns = st.columns(3)
+        for index, (key, label) in enumerate(daily_labels.items()):
+            value = result[key]
+            text = f"{value:.2%}" if key == "On-time completion" and value is not None else ("—" if value is None else f"{value:,}")
+            columns[index % 3].metric(label, text)
 
 
 packing_backlog()
@@ -81,12 +102,9 @@ def dashboard():
     try:
         for current in pd.date_range(week_start, pd.Timestamp(day)):
             for workflow in ("picking", "packing"):
-                upload = workbooks[workflow] if current.date() == day else None
                 files = [p for p in directory.glob(f"{warehouse}_{workflow}_{current.date()}.*")
                          if p.suffix in {".xlsx", ".xls"}]
-                source = upload if upload is not None else (
-                    max(files, key=lambda p: p.stat().st_mtime_ns) if files else None
-                )
+                source = max(files, key=lambda p: p.stat().st_mtime_ns) if files else None
                 if source is None:
                     missing.append(f"{current:%m-%d} {workflow}")
                     continue

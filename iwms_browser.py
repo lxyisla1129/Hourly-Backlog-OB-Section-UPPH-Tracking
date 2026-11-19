@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
-from iwms_calendar import backlog_window
+from iwms_calendar import backlog_window, weekly_backlog_window
 from playwright.sync_api import Error, TimeoutError, expect, sync_playwright
 
 
@@ -189,7 +189,7 @@ def find_report_frame(page, workflow):
 
 def report_range(day, backlog=False):
     if backlog:
-        left, right, _ = backlog_window(day)
+        left, right = weekly_backlog_window(day)
         return left.strftime("%Y-%m-%d %H:%M:%S"), (right - pd.Timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
     return f"{day} 00:00:00", f"{day} 23:59:59"
 

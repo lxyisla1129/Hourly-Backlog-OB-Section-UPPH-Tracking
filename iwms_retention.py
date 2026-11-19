@@ -12,3 +12,4 @@ def cleanup(directory, today):
         match = SNAPSHOT.fullmatch(path.name)
         if match and date.fromisoformat(match[1]) < cutoff:
             path.unlink(missing_ok=True)
+            path.with_suffix(".coverage.json").unlink(missing_ok=True)
