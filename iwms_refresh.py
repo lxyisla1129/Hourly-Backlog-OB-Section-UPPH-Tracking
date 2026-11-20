@@ -14,13 +14,17 @@ from iwms_browser import WAREHOUSE_IDS
 from iwms_retention import cleanup
 
 
-def refresh(url, day, account_menu_selector):
+def refresh(url, day, account_menu_selector, warehouse=None):
     script = Path(__file__).with_name("iwms_fixed.py")
     command = [
-        sys.executable, "-u", str(script), url, "--all-warehouses",
+        sys.executable, "-u", str(script), url,
         "--profile-warehouse", "LAX1", "--date", day.isoformat(),
         "--click-login", "--strict",
     ]
+    if warehouse:
+        command.extend(["--warehouse", warehouse, "--force-backlog"])
+    else:
+        command.append("--all-warehouses")
     result = subprocess.run(command, check=False)
     if result.returncode:
         print("本轮有报表未完成，请查看上方日志。", flush=True)
@@ -50,8 +54,12 @@ def main():
         next_run = 0
         last_start = 0
         if state_path.exists():
-            last_start = json.loads(state_path.read_text()).get("started", 0)
-            next_run = last_start + args.every_minutes * 60
+            previous = json.loads(state_path.read_text())
+            last_start = previous.get("started", 0)
+            if previous.get("success") and not previous.get("running"):
+                next_run = previous.get("automatic_started", last_start) + args.every_minutes * 60
+            else:
+                print("上轮未成功完成，立即重新采集。", flush=True)
         if next_run > time():
             next_time = datetime.fromtimestamp(next_run, TIMEZONE)
             print(
@@ -65,21 +73,43 @@ def main():
             now = time()
             requested = request.exists()
             if now >= next_run or (requested and now - last_start >= 1800):
-                request.unlink(missing_ok=True)
-                last_start = now
-                state = {"started": now, "running": True}
-                state_path.write_text(json.dumps(state))
                 today = datetime.now(TIMEZONE).date()
+                target_warehouse = None
+                target_day = args.date or today
+                manual = requested and now - last_start >= 1800
+                if manual:
+                    try:
+                        payload = json.loads(request.read_text())
+                        target_warehouse = payload["warehouse"]
+                        target_day = date.fromisoformat(payload["date"])
+                        if target_warehouse not in WAREHOUSE_IDS:
+                            raise ValueError("Unknown warehouse")
+                    except (ValueError, KeyError):
+                        target_warehouse = None
+                        target_day = args.date or today
+                    request.unlink(missing_ok=True)
+                last_start = now
+                if target_warehouse is None:
+                    automatic_started = now
+                    next_run = now + args.every_minutes * 60
+                else:
+                    automatic_started = next_run - args.every_minutes * 60
+                state = {
+                    "started": now, "running": True, "automatic_started": automatic_started,
+                    "warehouse": target_warehouse or "All warehouses", "date": str(target_day),
+                }
+                temporary = state_path.with_suffix(".tmp")
+                temporary.write_text(json.dumps(state))
+                temporary.replace(state_path)
+                print(f"正在刷新 {state['warehouse']} · {target_day}…", flush=True)
                 cleanup(Path(__file__).with_name("iwms-exports"), today)
-                status = refresh(args.url, args.date or today, args.account_menu_selector)
+                status = refresh(args.url, target_day, args.account_menu_selector, target_warehouse)
                 cleanup(Path(__file__).with_name("iwms-exports"), today)
                 state.update(running=False, finished=time(), success=status == 0)
-                temporary = state_path.with_suffix(".tmp")
                 temporary.write_text(json.dumps(state))
                 temporary.replace(state_path)
                 if args.once:
                     return status
-                next_run = last_start + args.every_minutes * 60
                 print("等待下一次自动刷新或页面刷新请求。", flush=True)
             elif args.once:
                 print("距离上轮启动不足设定间隔，请稍后再试。")

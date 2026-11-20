@@ -83,3 +83,11 @@ LAX5 test after stopping the running collector
 ```bash
 python iwms_fixed.py 'https://pulsar-login.jd.com/login.html?ReturnUrl=https%3A%2F%2Fiwms-us.jd.com%2F#/' --warehouse LAX5 --profile-warehouse LAX1 --workflows backlog --force-backlog --click-login --strict
 ```
+
+## Streamlit ASGI compatibility
+
+The package pins starlette==1.3.1 with streamlit==1.59.2, matching the development environment. If an existing Windows installation reports Expected ASGI message http.response.start but got http.response.body, stop services and reinstall requirements with the same .venv Python before restarting.
+
+## Manual refresh scope
+
+The Refresh button requests only the selected warehouse and date, including a fresh backlog export. Scheduled collection continues for all four warehouses every two hours. All users share a 30-minute start limit; requests wait while an existing round finishes. The sidebar polls refresh status every five seconds. Large iWMS exports can still require server-side task generation.

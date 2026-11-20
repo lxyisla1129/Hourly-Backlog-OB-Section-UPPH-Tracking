@@ -23,19 +23,34 @@ st.caption("Activity-span UPPH. Packing uses sales order recheck quantities and 
 with st.sidebar:
     warehouse = st.selectbox("Warehouse for these exports", WAREHOUSE_IDS)
     day = st.date_input("Date", datetime.now(ZoneInfo("America/Los_Angeles")).date())
+
+@st.fragment(run_every=5)
+def refresh_controls():
     state_dir = Path(__file__).resolve().parent / ".runtime" / "iwms-refresh"
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path = state_dir / "status.json"
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    request = state_dir / "requested"
     cooling = time() - state.get("started", 0) < 1800
-    pending = (state_dir / "requested").exists()
-    if st.button("Refresh warehouse data", disabled=cooling or pending):
-        (state_dir / "requested").touch()
-        st.info("Refresh requested. Keep iwms_refresh.py running.")
-    st.caption("Manual refresh requests are limited to once every 30 minutes.")
-    if state.get("finished"):
-        updated = datetime.fromtimestamp(state["finished"], ZoneInfo("America/Los_Angeles"))
-        st.caption(f"Last round: {updated:%m-%d %H:%M} · {'Complete' if state.get('success') else 'Partial failure'}")
+    with st.sidebar:
+        if st.button(f"Refresh {warehouse} data", disabled=cooling or request.exists()):
+            try:
+                with request.open("x") as pending:
+                    json.dump({"warehouse": warehouse, "date": str(day)}, pending)
+            except FileExistsError:
+                pass
+            st.rerun(scope="fragment")
+        st.caption("Refreshes the selected warehouse and date. Shared 30-minute limit.")
+        if state.get("running"):
+            st.info(f"Collecting {state.get('warehouse', 'warehouse data')} · {state.get('date', '')}. Large exports may take several minutes.")
+        if request.exists():
+            st.info("Refresh queued. Keep the collector running.")
+        if state.get("finished"):
+            updated = datetime.fromtimestamp(state["finished"], ZoneInfo("America/Los_Angeles"))
+            st.caption(f"Last round: {updated:%m-%d %H:%M} · {'Complete' if state.get('success') else 'Partial failure'}")
+
+
+refresh_controls()
 
 @st.fragment(run_every=60)
 def packing_backlog():
