@@ -9,7 +9,8 @@ import subprocess
 import sys
 from time import monotonic, sleep
 
-from iwms_batch import TIMEZONE
+from zoneinfo import ZoneInfo
+TIMEZONE = ZoneInfo("America/Los_Angeles")
 from iwms_browser import WAREHOUSE_IDS
 from iwms_retention import cleanup
 
@@ -22,7 +23,7 @@ def refresh(url, day, account_menu_selector, warehouse=None):
         "--click-login", "--strict",
     ]
     if warehouse:
-        command.extend(["--warehouse", warehouse, "--force-backlog"])
+        command.extend(["--warehouse", warehouse])
     else:
         command.append("--all-warehouses")
     result = subprocess.run(command, check=False)

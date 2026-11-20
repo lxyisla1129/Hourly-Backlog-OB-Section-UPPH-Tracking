@@ -7,7 +7,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
-from iwms_calendar import backlog_window, weekly_backlog_window
 from playwright.sync_api import Error, TimeoutError, expect, sync_playwright
 
 
@@ -46,8 +45,8 @@ WAREHOUSE_IDS = {
     "LAX4": "C0000008149",
     "LAX5": "C0000009307",
 }
-REPORT_NAMES = {"backlog": "Sales Outbound Comprehensive Query", "picking": "Picking Results Query", "packing": "Sales Order Review Result Inquiry"}
-DATE_LABELS = {"backlog": "Receive Date", "picking": "Picking Date", "packing": "Recheck Time"}
+REPORT_NAMES = {"picking": "Picking Results Query", "packing": "Sales Order Review Result Inquiry"}
+DATE_LABELS = {"picking": "Picking Date", "packing": "Recheck Time"}
 DATE_TIME = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
 DATE_PART = re.compile(r"(?:\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2})")
 
@@ -188,9 +187,6 @@ def find_report_frame(page, workflow):
 
 
 def report_range(day, backlog=False):
-    if backlog:
-        left, right = weekly_backlog_window(day)
-        return left.strftime("%Y-%m-%d %H:%M:%S"), (right - pd.Timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
     return f"{day} 00:00:00", f"{day} 23:59:59"
 
 

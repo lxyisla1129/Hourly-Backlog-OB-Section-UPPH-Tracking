@@ -12,17 +12,31 @@ from iwms_browser import ExportError, WAREHOUSE_IDS
 from iwms_excel import normalize_export
 from metrics import cumulative, employee_summary, hourly, week_to_date
 from iwms_segments import special_business
-from iwms_backlog import backlog_summary
-from iwms_calendar import backlog_window, weekly_backlog_window
 
-title = "Hourly Backlog & OB Section UPPH Tracking"
+title = "Hourly Picking & Packing UPPH Tracking"
 st.set_page_config(page_title=title, layout="wide")
 st.title(title)
 st.caption("Activity-span UPPH. Packing uses sales order recheck quantities and timestamps.")
 
 with st.sidebar:
     warehouse = st.selectbox("Warehouse for these exports", WAREHOUSE_IDS)
-    day = st.date_input("Date", datetime.now(ZoneInfo("America/Los_Angeles")).date())
+    today = datetime.now(ZoneInfo("America/Los_Angeles")).date()
+    available_dates = []
+    for workflow in ("picking", "packing"):
+        for file in Path(__file__).with_name("iwms-exports").glob(f"{warehouse}_{workflow}_*.xlsx"):
+            try:
+                available_dates.append(datetime.strptime(file.stem[-10:], "%Y-%m-%d").date())
+            except ValueError:
+                pass
+    default_day = max((value for value in available_dates if value <= today), default=today)
+    day = st.date_input("Date", default_day, max_value=today)
+    if day != today:
+        st.caption(f"Showing saved data for {day}. Refresh today to collect current activity.")
+
+@st.cache_data(max_entries=48, show_spinner="Reading report...")
+def load_report(path, workflow, warehouse_name, modified_ns, size):
+    return normalize_export(path, workflow, warehouse_name)
+
 
 @st.fragment(run_every=5)
 def refresh_controls():
@@ -53,62 +67,6 @@ def refresh_controls():
 refresh_controls()
 
 @st.fragment(run_every=60)
-def packing_backlog():
-    directory = Path(__file__).with_name("iwms-exports")
-    files = list(directory.glob(f"{warehouse}_backlog_{day}.xlsx")) + list(
-        directory.glob(f"{warehouse}_backlog_{day}.xls")
-    )
-    if not files:
-        st.info(f"{warehouse} · {day}: waiting for the first automatic backlog export.")
-        st.caption("Keep iwms_refresh.py running. Backlog is collected after Picking and Packing.")
-        return
-    export = max(files, key=lambda path: path.stat().st_mtime_ns)
-    updated = datetime.fromtimestamp(export.stat().st_mtime, ZoneInfo("America/Los_Angeles"))
-    st.caption(f"Automatic export updated {updated:%Y-%m-%d %H:%M} · Los Angeles time")
-    try:
-        result = backlog_summary(pd.read_excel(export, dtype=object), day)
-    except (ValueError, OSError):
-        st.error("Cannot verify this export's required columns, order IDs or timestamps.")
-        return
-    summary_tab, processing_tab = st.tabs(["Backlog Summary", "Total Processing Status"])
-    with summary_tab:
-        st.subheader("Backlog Summary")
-        coverage = export.with_suffix(".coverage.json")
-        if coverage.exists():
-            weekly_result = backlog_summary(pd.read_excel(export, dtype=object), day, weekly=True)
-            weekly_columns = st.columns(3)
-            for column, (label, value) in zip(weekly_columns, weekly_result.items()):
-                text = f"{value:.2%}" if label == "Completion rate" and value is not None else ("—" if value is None else f"{value:,}")
-                column.metric(label, text)
-            week_left, week_right = weekly_backlog_window(day)
-            st.caption(f"Receipt cohorts for the selected date and preceding six dates, including weekend rollover: {week_left:%m-%d %H:%M} to {week_right:%m-%d %H:%M} (exclusive). Status as of the export update time above. Excludes 2B/selfpickup.")
-        else:
-            st.info("Weekly totals await a new weekly-range backlog export; this older file only covers the daily cohort.")
-    with processing_tab:
-        st.subheader("Total Processing Status")
-        left, right, deadline = backlog_window(day)
-        st.caption(f"{warehouse} · Received {left:%m-%d %H:%M} to {right:%m-%d %H:%M} (exclusive) · Deadline {deadline:%m-%d %H:%M} · Los Angeles time")
-        st.caption("BL is a reference based on a 24h baseline. Weekend receipts from Friday 15:00 to Monday 15:00 are due Monday 17:30. Pending stages are counted independently and may overlap.")
-        daily_labels = {
-            "Received orders": "Received orders",
-            "Packed": "Packed",
-            "Pending picking": "Pending picking",
-            "Pending recheck": "Pending recheck",
-            "Pending packing": "Pending pack",
-            "Pending handover": "Pending handover",
-            "On-time completion": "On-time completion",
-        }
-        columns = st.columns(3)
-        for index, (key, label) in enumerate(daily_labels.items()):
-            value = result[key]
-            text = f"{value:.2%}" if key == "On-time completion" and value is not None else ("—" if value is None else f"{value:,}")
-            columns[index % 3].metric(label, text)
-
-
-packing_backlog()
-
-
-@st.fragment(run_every=60)
 def dashboard():
     directory = Path(__file__).with_name("iwms-exports")
     week_start = pd.Timestamp(day) - pd.Timedelta(days=pd.Timestamp(day).weekday())
@@ -123,7 +81,8 @@ def dashboard():
                 if source is None:
                     missing.append(f"{current:%m-%d} {workflow}")
                     continue
-                frame = normalize_export(source, workflow, warehouse)
+                stat = source.stat()
+                frame = load_report(str(source), workflow, warehouse, stat.st_mtime_ns, stat.st_size)
                 frame = frame.loc[frame.end_time.dt.date.eq(current.date())]
                 frames.append(frame)
     except ExportError as error:

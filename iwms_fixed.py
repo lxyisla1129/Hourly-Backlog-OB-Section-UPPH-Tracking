@@ -8,11 +8,11 @@ from time import monotonic
 
 from playwright.sync_api import Error, TimeoutError, sync_playwright
 
-from iwms_batch import TIMEZONE
+from zoneinfo import ZoneInfo
+TIMEZONE = ZoneInfo("America/Los_Angeles")
 from iwms_browser import ExportError, WAREHOUSE_IDS, query_report, save_export, select_warehouse, warehouse_frame
 from iwms_excel import normalize_export
 from iwms_download import download_report
-from iwms_backlog import backlog_summary
 import pandas as pd
 
 
@@ -57,8 +57,7 @@ def main():
     parser.add_argument("--login-only", action="store_true", help="Initialize the warehouse Chrome profile without exporting.")
     parser.add_argument("--profile-warehouse", choices=WAREHOUSE_IDS, help="Reuse an existing warehouse Chrome profile.")
     parser.add_argument("--all-warehouses", action="store_true", help="Switch warehouses through Basic Data in one Chrome session.")
-    parser.add_argument("--workflows", nargs="+", choices=["picking", "packing", "backlog"], default=["picking", "packing", "backlog"])
-    parser.add_argument("--force-backlog", action="store_true", help="Refresh a backlog snapshot already collected today.")
+    parser.add_argument("--workflows", nargs="+", choices=["picking", "packing"], default=["picking", "packing"])
     args = parser.parse_args()
     if args.login_only and args.strict:
         parser.error("--login-only requires manual SSO and cannot be combined with --strict.")
@@ -135,31 +134,13 @@ def main():
                     for workflow in args.workflows:
                         print(f"正在处理 {warehouse} {workflow} {day}…", flush=True)
                         path = None
-                        coverage = args.output_dir / f"{warehouse}_backlog_{day}.coverage.json"
-                        if workflow == "backlog" and coverage.exists() and not args.force_backlog:
-                            candidates = list(args.output_dir.glob(f"{warehouse}_backlog_{day}.xls*"))
-                            if candidates:
-                                print("今日每周范围积压快照已存在，跳过重复下载。", flush=True)
-                                continue
                         try:
                             frame = query_report(page, workflow, day, interactive=not args.strict)
                             download = download_report(page, frame, workflow, TIMEZONE)
                             path = save_export(download, args.output_dir)
-                            if workflow == "backlog":
-                                backlog_summary(pd.read_excel(path, dtype=object), day)
-                            else:
-                                normalize_export(path, workflow, warehouse)
+                            normalize_export(path, workflow, warehouse)
                             snapshot = path.with_name(f"{warehouse}_{workflow}_{day}{path.suffix}")
                             path.replace(snapshot)
-                            if workflow == "backlog":
-                                from iwms_calendar import weekly_backlog_window
-                                left, right = weekly_backlog_window(day)
-                                temporary = coverage.with_suffix(".tmp")
-                                temporary.write_text(json.dumps({
-                                    "received_from": left.isoformat(), "received_before": right.isoformat(),
-                                    "collected_at": datetime.now(TIMEZONE).isoformat()
-                                }))
-                                temporary.replace(coverage)
                             print(f"Dashboard snapshot saved as {snapshot.name}.", flush=True)
                         except (Error, AssertionError, ExportError, OSError) as error:
                             failures += 1
@@ -167,8 +148,8 @@ def main():
                                 path.unlink(missing_ok=True)
                             print(str(error) if isinstance(error, ExportError) else "报表操作失败。", flush=True)
                 if args.strict and not failures:
-                    print("PASS: All four warehouses exported Picking, Packing and Backlog." if args.all_warehouses
-                          else "PASS: Picking, Packing and Backlog exported with no manual interaction.", flush=True)
+                    print("PASS: All four warehouses exported Picking and Packing." if args.all_warehouses
+                          else "PASS: Picking and Packing exported with no manual interaction.", flush=True)
                 return int(bool(failures))
             finally:
                 context.close()
